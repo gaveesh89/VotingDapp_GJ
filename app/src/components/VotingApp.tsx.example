@@ -1,0 +1,373 @@
+// React component for wallet integration and voting interface
+import React, { useState, useEffect, useMemo } from 'react';
+import { Connection, PublicKey } from '@solana/web3.js';
+import { 
+  ConnectionProvider, 
+  WalletProvider, 
+  useWallet, 
+  useConnection 
+} from '@solana/wallet-adapter-react';
+import { WalletAdapterNetwork } from '@solana/wallet-adapter-base';
+import { 
+  PhantomWalletAdapter 
+} from '@solana/wallet-adapter-phantom';
+import {
+  WalletModalProvider,
+  WalletMultiButton,
+  WalletDisconnectButton,
+} from '@solana/wallet-adapter-react-ui';
+
+import { VotingDappClient } from '../client';
+import { Network, Poll, Candidate } from '../types';
+
+// Main voting app component
+export const VotingApp: React.FC = () => {
+  const network = WalletAdapterNetwork.Devnet; // Change as needed
+  const endpoint = useMemo(() => 'http://127.0.0.1:8899', []);
+
+  const wallets = useMemo(
+    () => [
+      new PhantomWalletAdapter(),
+    ],
+    []
+  );
+
+  return (
+    <ConnectionProvider endpoint={endpoint}>
+      <WalletProvider wallets={wallets} autoConnect>
+        <WalletModalProvider>
+          <VotingInterface />
+        </WalletModalProvider>
+      </WalletProvider>
+    </ConnectionProvider>
+  );
+};
+
+// Voting interface component
+const VotingInterface: React.FC = () => {
+  const { connection } = useConnection();
+  const wallet = useWallet();
+  const [client, setClient] = useState<VotingDappClient | null>(null);
+  const [polls, setPolls] = useState<Poll[]>([]);
+  const [selectedPoll, setSelectedPoll] = useState<number | null>(null);
+  const [candidates, setCandidates] = useState<Candidate[]>([]);
+  const [loading, setLoading] = useState(false);
+
+  // Initialize client when wallet connects
+  useEffect(() => {
+    if (wallet.connected && wallet.publicKey) {
+      const votingClient = new VotingDappClient(Network.LOCALNET, wallet as any);
+      setClient(votingClient);
+    } else {
+      setClient(null);
+    }
+  }, [wallet.connected, wallet.publicKey]);
+
+  // Load poll data
+  const loadPollData = async (pollId: number) => {
+    if (!client) return;
+    
+    setLoading(true);
+    try {
+      const poll = await client.getPoll(pollId);
+      const pollCandidates = await client.getCandidatesForPoll(pollId);
+      
+      if (poll) {
+        setPolls([poll]);
+        setCandidates(pollCandidates);
+        setSelectedPoll(pollId);
+      }
+    } catch (error) {
+      console.error('Error loading poll data:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Create a new poll
+  const createPoll = async (
+    question: string, 
+    description: string, 
+    durationHours: number
+  ) => {
+    if (!client) return;
+
+    setLoading(true);
+    try {
+      const pollId = Math.floor(Math.random() * 1000000);
+      const now = Math.floor(Date.now() / 1000);
+      const startTime = now;
+      const endTime = now + (durationHours * 3600);
+
+      const tx = await client.createPoll({
+        pollId,
+        question,
+        description,
+        startTime,
+        endTime
+      });
+
+      console.log('Poll created:', tx);
+      await loadPollData(pollId);
+    } catch (error) {
+      console.error('Error creating poll:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Add candidate to poll
+  const addCandidate = async (name: string, party: string) => {
+    if (!client || selectedPoll === null) return;
+
+    setLoading(true);
+    try {
+      const tx = await client.addCandidate({
+        pollId: selectedPoll,
+        candidateName: name,
+        candidateParty: party
+      });
+
+      console.log('Candidate added:', tx);
+      await loadPollData(selectedPoll);
+    } catch (error) {
+      console.error('Error adding candidate:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Vote for candidate
+  const vote = async (candidateName: string) => {
+    if (!client || selectedPoll === null) return;
+
+    setLoading(true);
+    try {
+      const tx = await client.vote({
+        pollId: selectedPoll,
+        candidateName
+      });
+
+      console.log('Vote cast:', tx);
+      await loadPollData(selectedPoll);
+    } catch (error) {
+      console.error('Error voting:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  if (!wallet.connected) {
+    return (
+      <div className="voting-app">
+        <h1>Solana Voting DApp</h1>
+        <p>Please connect your wallet to continue</p>
+        <WalletMultiButton />
+      </div>
+    );
+  }
+
+  return (
+    <div className="voting-app">
+      <header>
+        <h1>Solana Voting DApp</h1>
+        <div className="wallet-buttons">
+          <WalletMultiButton />
+          <WalletDisconnectButton />
+        </div>
+      </header>
+
+      <main>
+        {/* Poll Creation Form */}
+        <section className="create-poll">
+          <h2>Create New Poll</h2>
+          <PollCreationForm onCreatePoll={createPoll} loading={loading} />
+        </section>
+
+        {/* Poll Loader */}
+        <section className="load-poll">
+          <h2>Load Existing Poll</h2>
+          <PollLoader onLoadPoll={loadPollData} loading={loading} />
+        </section>
+
+        {/* Poll Display */}
+        {selectedPoll !== null && polls.length > 0 && (
+          <section className="poll-display">
+            <PollDisplay 
+              poll={polls[0]} 
+              candidates={candidates}
+              onAddCandidate={addCandidate}
+              onVote={vote}
+              loading={loading}
+            />
+          </section>
+        )}
+      </main>
+    </div>
+  );
+};
+
+// Poll creation form component
+const PollCreationForm: React.FC<{
+  onCreatePoll: (question: string, description: string, duration: number) => void;
+  loading: boolean;
+}> = ({ onCreatePoll, loading }) => {
+  const [question, setQuestion] = useState('');
+  const [description, setDescription] = useState('');
+  const [duration, setDuration] = useState(24);
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (question && description) {
+      onCreatePoll(question, description, duration);
+      setQuestion('');
+      setDescription('');
+      setDuration(24);
+    }
+  };
+
+  return (
+    <form onSubmit={handleSubmit}>
+      <input
+        type="text"
+        placeholder="Poll Question"
+        value={question}
+        onChange={(e) => setQuestion(e.target.value)}
+        required
+      />
+      <textarea
+        placeholder="Poll Description"
+        value={description}
+        onChange={(e) => setDescription(e.target.value)}
+        required
+      />
+      <input
+        type="number"
+        placeholder="Duration (hours)"
+        value={duration}
+        onChange={(e) => setDuration(Number(e.target.value))}
+        min={1}
+        required
+      />
+      <button type="submit" disabled={loading}>
+        {loading ? 'Creating...' : 'Create Poll'}
+      </button>
+    </form>
+  );
+};
+
+// Poll loader component
+const PollLoader: React.FC<{
+  onLoadPoll: (pollId: number) => void;
+  loading: boolean;
+}> = ({ onLoadPoll, loading }) => {
+  const [pollId, setPollId] = useState('');
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (pollId) {
+      onLoadPoll(Number(pollId));
+    }
+  };
+
+  return (
+    <form onSubmit={handleSubmit}>
+      <input
+        type="number"
+        placeholder="Poll ID"
+        value={pollId}
+        onChange={(e) => setPollId(e.target.value)}
+        required
+      />
+      <button type="submit" disabled={loading}>
+        {loading ? 'Loading...' : 'Load Poll'}
+      </button>
+    </form>
+  );
+};
+
+// Poll display component
+const PollDisplay: React.FC<{
+  poll: Poll;
+  candidates: Candidate[];
+  onAddCandidate: (name: string, party: string) => void;
+  onVote: (name: string) => void;
+  loading: boolean;
+}> = ({ poll, candidates, onAddCandidate, onVote, loading }) => {
+  const [candidateName, setCandidateName] = useState('');
+  const [candidateParty, setCandidateParty] = useState('');
+
+  const handleAddCandidate = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (candidateName && candidateParty) {
+      onAddCandidate(candidateName, candidateParty);
+      setCandidateName('');
+      setCandidateParty('');
+    }
+  };
+
+  const totalVotes = candidates.reduce((sum, candidate) => 
+    sum + candidate.votes.toNumber(), 0
+  );
+
+  return (
+    <div className="poll-display">
+      <h2>{poll.question}</h2>
+      <p>{poll.description}</p>
+      <p>Poll ID: {poll.pollId.toString()}</p>
+
+      {/* Add Candidate Form */}
+      <div className="add-candidate">
+        <h3>Add Candidate</h3>
+        <form onSubmit={handleAddCandidate}>
+          <input
+            type="text"
+            placeholder="Candidate Name"
+            value={candidateName}
+            onChange={(e) => setCandidateName(e.target.value)}
+            required
+          />
+          <input
+            type="text"
+            placeholder="Party"
+            value={candidateParty}
+            onChange={(e) => setCandidateParty(e.target.value)}
+            required
+          />
+          <button type="submit" disabled={loading}>
+            Add Candidate
+          </button>
+        </form>
+      </div>
+
+      {/* Candidates List */}
+      <div className="candidates">
+        <h3>Candidates</h3>
+        {candidates.length === 0 ? (
+          <p>No candidates yet</p>
+        ) : (
+          candidates.map((candidate, index) => (
+            <div key={index} className="candidate">
+              <div className="candidate-info">
+                <h4>{candidate.name}</h4>
+                <p>Party: {candidate.party}</p>
+                <p>Votes: {candidate.votes.toString()}</p>
+                {totalVotes > 0 && (
+                  <p>Percentage: {((candidate.votes.toNumber() / totalVotes) * 100).toFixed(1)}%</p>
+                )}
+              </div>
+              <button 
+                onClick={() => onVote(candidate.name)}
+                disabled={loading}
+              >
+                Vote
+              </button>
+            </div>
+          ))
+        )}
+      </div>
+
+      <p>Total Votes: {totalVotes}</p>
+    </div>
+  );
+};
