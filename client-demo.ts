@@ -78,9 +78,7 @@ async function main() {
     const tx = await program.methods
       .initializePoll(pollId, question, description, startTime, endTime)
       .accounts({
-        poll: pollPda,
         creator: creator.publicKey,
-        systemProgram: SystemProgram.programId,
       })
       .rpc();
 
@@ -121,10 +119,7 @@ async function main() {
       const tx = await program.methods
         .initializeCandidate(candidate.name, candidate.party)
         .accounts({
-          poll: pollPda,
-          candidate: candidatePda,
           creator: creator.publicKey,
-          systemProgram: SystemProgram.programId,
         })
         .rpc();
 
@@ -164,11 +159,7 @@ async function main() {
     const tx = await program.methods
       .vote()
       .accounts({
-        poll: pollPda,
-        candidate: candidatePda,
-        voterReceipt: receiptPda,
         voter: voter.publicKey,
-        systemProgram: SystemProgram.programId,
       })
       .signers([voter])
       .rpc();
